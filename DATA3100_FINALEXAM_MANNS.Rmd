@@ -1,0 +1,379 @@
+---
+title: "DATA3100_FINALEXAM_MANNS"
+author: "Maya Manns"
+date: "2026-03-07"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+
+Question 1:
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+##names(elections)
+
+library(tidyverse)
+voteview <- read_csv("voteview_house_ideology.csv")
+elections <- read_csv("1976-2024-house.csv")
+
+voteview_filtered <- voteview %>%
+  filter(congress >= 113 & congress <= 118)
+
+elections_filtered <- elections %>%
+  filter(year >= 2012 & year <= 2022, stage == "GEN") %>%
+  mutate(party = ifelse(party == "DEMOCRATIC-FARMER-LABOR", "DEMOCRAT", party)) %>%
+  filter(party %in% c("DEMOCRAT", "REPUBLICAN"))
+
+elections_filtered <- elections_filtered %>%
+  group_by(year, state_po, district) %>%
+  mutate(two_party_total = sum(candidatevotes, na.rm = TRUE),
+         vote_share = candidatevotes / two_party_total) %>%
+  ungroup()
+
+elections_filtered <- elections_filtered %>%
+  mutate(congress = 113 + (year - 2012) / 2)
+final_df <- elections_filtered %>%
+  inner_join(voteview_filtered, by = c("congress" = "congress", 
+                                       "state_po" = "state_abbrev", 
+                                       "district" = "district_code"))
+
+
+head(final_df)
+
+```
+
+
+Question 2: 
+
+The results show that the variation in district competitiveness (measured by the standard deviation of winners vote shares) has fluctuated significantly rather than steadily increasing. While the 116th Congress had the greatest disparity in how 'safe' winners were, the 118th Congress saw a big decline in this variation.
+
+```{r question 2}
+
+winners_analysis <- final_df %>%
+  group_by(year, state_po, district) %>%
+  filter(vote_share == max(vote_share)) %>%
+  ungroup() %>%
+  filter(vote_share < 1.00)
+
+competitiveness_stats <- winners_analysis %>%
+  group_by(congress) %>%
+  summarize(sd_vote_share = sd(vote_share, na.rm = TRUE))
+
+ggplot(competitiveness_stats, aes(x = congress, y = sd_vote_share)) +
+  geom_line(color = "purple", size = 1) +
+  geom_point(size = 3) +
+  labs(
+    title = "Standard Deviation of Winner's Two-Party Vote Share. Congresses 113 to 118",
+    x = "Congress Number",
+    y = "Standard Deviation (Vote Share)"
+  ) +
+  theme_minimal()
+
+
+
+
+```
+Question 3:
+
+This plot shows how the Democratic seat share looks across different sample sizes from 2018. As we go from a 10% sample to a 50% sample, the distribution gets much narrower and clusters right around the true value of 0.55. It is suggested that larger samples give us more precise estimates and less 'spread.' Even though the smaller samples are wider, they are still centered on the truth, showing that our sampling process isn't biased.
+
+```{r question 3} 
+
+
+pop_2018 <- final_df %>%
+  filter(congress == 116) %>%
+  group_by(state_po, district) %>%
+  filter(vote_share == max(vote_share)) %>%
+  ungroup() %>%
+
+  mutate(is_dem = if_else(party.x == "DEMOCRAT", 1, 0))
+
+set.seed(123)
+true_prop <- mean(pop_2018$is_dem) 
+get_dist <- function(n) {
+  replicate(1000, mean(sample(pop_2018$is_dem, size = n, replace = FALSE)))
+}
+
+sim_data <- data.frame(
+  prop = c(get_dist(44), get_dist(109), get_dist(218)),
+  sample_size = rep(c("10% (n=44)", "25% (n=109)", "50% (n=218)"), each = 1000)
+)
+
+stats <- sim_data %>%
+  group_by(sample_size) %>%
+  summarize(
+    Standard_Error = sd(prop),
+    Lower_Bound = quantile(prop, 0.025),
+    Upper_Bound = quantile(prop, 0.975),
+    Range = Upper_Bound - Lower_Bound
+  )
+
+print(stats)
+
+
+ggplot(sim_data, aes(x = prop, fill = sample_size)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(xintercept = true_prop) +
+  labs(title = "Sampling Distribution of Democratic Seat Share (2018 Data)",
+       x = "Proportion of Democratic Seats",
+       y = "Density",
+       fill = "Sample Size") +
+  theme_minimal()
+
+
+
+```
+
+
+Question 4:
+
+With a sample of 25% of districts, the 95% confidence interval for the Democratic two-party vote share is (51.8%, 58.5%), allowing us to confidently predict a popular vote victory since the entire range is above the 50% threshold.However, we cannot truly predict a seat majority because that 95% confidence interval is wider at (47.7%, 63.3%) and includes values below 0.50. This means that while the sample size is enough to confirm the overall popular vote winner, the seat share estimate has too much spread for us to be sure about a Republican majority at the 95% level.
+
+```{r question 4} 
+
+pop_vote_2018 <- final_df %>%
+  filter(congress == 116) %>%
+  filter(party.x == "DEMOCRAT") %>%
+  pull(vote_share)
+
+set.seed(100)
+n_sample <- 109
+vote_sim <- replicate(1000, mean(sample(pop_vote_2018, size = n_sample, replace = FALSE)))
+
+vote_ci <- quantile(vote_sim, c(0.025, 0.975))
+print("95% CI for Democratic Two-Party Vote Share:")
+print(vote_ci)
+
+seat_sim <- replicate(1000, mean(sample(pop_2018$is_dem, size = n_sample, replace = FALSE)))
+seat_ci <- quantile(seat_sim, c(0.025, 0.975))
+print("95% CI for Proportion of Democratic Seats:")
+print(seat_ci)
+
+
+
+
+```
+
+Question 5: 
+
+The analysis reveals that competitive districts consistently elect more moderate representatives than safe districts across all of the congresses studied. This effect is statistically significant in every cycle and reached its highest point in the 118th Congress, where the gap in extremity between competitive and safe districts was most apparent. 
+
+
+```{r question 5} 
+
+analysis_df <- final_df %>%
+  group_by(congress, state_po, district) %>%
+  filter(vote_share == max(vote_share)) %>%
+  ungroup() %>%
+  mutate(
+    dist_type = case_when(
+      vote_share > 0.60 ~ "Safe",
+      vote_share >= 0.50 & vote_share <= 0.60 ~ "Competitive"),
+    abs_nominate = abs(nominate_dim1)
+  ) %>%
+  filter(!is.na(dist_type))
+
+congress_list <- 113:118
+results_list <- list()
+
+for (i in seq_along(congress_list)) {
+  current_cong <- congress_list[i]
+  
+  data_sub <- analysis_df %>% filter(congress == current_cong)
+  t_result <- t.test(abs_nominate ~ dist_type, data = data_sub)
+  
+  results_list[[i]] <- tibble(
+    congress = current_cong,
+    diff_mean = t_result$estimate[1] - t_result$estimate[2], 
+    lower_ci = t_result$conf.int[1],
+    upper_ci = t_result$conf.int[2]
+  )
+}
+
+t_test_results <- bind_rows(results_list)
+
+ggplot(t_test_results, aes(x = congress, y = diff_mean)) +
+  geom_point(size = 3, color = "orange") +
+  geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  labs(
+    title = "Difference in Mean Extremity: Competitive vs. Safe Districts",
+    subtitle = "Positive values = competitive districts are more extreme; Negative = less extreme",
+    x = "Congress Number",
+    y = "Difference in Absolute DW-NOMINATE"
+  ) +
+  theme_minimal()
+
+
+
+
+
+
+```
+
+Question 6: 
+
+In competitive districts, new members of Congress are slightly more moderate on average than incumbents, with a mean absolute DW-NOMINATE score of 0.381 compared to 0.385. However, this difference is not statistically significant (p = 0.7766). This indicates that while the competitive districts as a whole, favor moderation, there is no evidence that a member's freshman status specifically impacts their ideological position compared to an incumbent in the same electoral environment.
+
+
+
+```{r question 6} 
+
+final_df_freshmen <- final_df %>%
+  arrange(bioname, congress) %>%
+  group_by(bioname) %>%
+  mutate(
+    is_new_member = (congress == min(congress)) & (congress > 113)
+  ) %>%
+  ungroup()
+
+competitive_comparison <- final_df_freshmen %>%
+  group_by(congress, state_po, district) %>%
+  filter(vote_share == max(vote_share)) %>%
+  ungroup() %>%
+  filter(vote_share >= 0.50 & vote_share <= 0.60) %>%
+  filter(congress > 113) 
+
+freshmen_moderation <- competitive_comparison %>%
+  group_by(is_new_member) %>%
+  summarize(
+    mean_abs_nominate = mean(abs(nominate_dim1), na.rm = TRUE),
+    n = n(),
+    sd = sd(abs(nominate_dim1), na.rm = TRUE)
+  )
+
+print(freshmen_moderation)
+
+
+
+
+
+
+
+
+
+
+```
+
+
+
+
+Question 7: 
+
+The OLS model shows that electoral safety is a strong predictor of extremity; as a member's vote share increases, they tend to move further away from the ideological center. While Republicans are significantly more extreme on average than Democrats in this dataset, being a new member does not significantly impact a representative's level of moderation compared to incumbents
+
+
+
+```{r question 7} 
+
+
+
+
+reg_data <- final_df_freshmen %>%
+  group_by(congress, state_po, district) %>%
+  filter(vote_share == max(vote_share)) %>%
+  ungroup() %>%
+  filter(congress > 113) %>%
+  mutate(abs_nominate = abs(nominate_dim1))
+
+model <- lm(abs_nominate ~ vote_share + party.x + is_new_member, data = reg_data)
+
+
+summary(model)
+
+
+
+
+
+
+
+```
+
+
+Question 8:
+
+Moving from a competitive 55% win to a safe 70% win results in a predicted increase in ideological extremity of approximately 0.043 units. This provides clear evidence that electoral safety is a primary driver of extremism, independent of the member's party or seniority
+
+
+```{r question 8} 
+
+
+comparison_data <- data.frame(
+  vote_share = c(0.55, 0.70),
+  party.x = c("DEMOCRAT", "DEMOCRAT"),
+  is_new_member = c(FALSE, FALSE)
+)
+
+
+predicted_values <- predict(model, newdata = comparison_data)
+
+
+comparison_results <- comparison_data %>%
+  mutate(predicted_extremity = predicted_values)
+
+print(comparison_results)
+
+
+
+
+
+
+```
+
+
+
+Question 9:
+
+i) The intercept of 0.2396 represents the predicted probability of a winner being a new member for a Republican in 2014 with a 0.0 DW-NOMINATE score and a 0% vote share. While a 0% vote share is not possible for a winner, this value serves as the mathematical baseline from which all other variables shift the probability.
+
+ii) Because 2014 and Republicans were excluded, the other coefficients represent the percentage point difference in probability compared to those specific baselines. For example, the Democratic coefficient shows how much more or less likely a Democrat is to be "new" than a Republican, holding all other factors like ideology and vote share constant.
+
+
+iii) The only year in which new members were statistically more likely to be elected than in 2014 was 2018, which saw a 6.2 percentage point increase in the probability of a winner being a freshman (p = 0.000986). Other years like 2016, 2020, and 2022 did not show a statistically significant difference in turnover compared to the 2014 baseline.
+
+
+iv) A one-unit change (moving from 0% to 100% vote share) decreases the probability of the winner being a new member by 12.97 percentage points. So, for every 1% increase in the margin of victory, the likelihood of that winner being a freshman drops by about 0.13%, confirming that incumbents are much more likely to hold "safe" seats.
+
+
+v) No, one party is not significantly more likely to elect new members than the other once you control for the electoral environment. The Democratic coefficient is nearly zero and carries a high p-value of 0.7487, indicating that partisanship has no independent statistical effect on the probability of a winner being a new representative.
+
+
+
+
+```{r question 9} 
+
+lpm_data <- final_df_freshmen %>%
+  filter(congress > 113) %>% 
+  mutate(
+    year_fct = relevel(factor(year), ref = "2014"),
+    party_fct = relevel(factor(party.x), ref = "REPUBLICAN"),
+    is_new_num = as.numeric(is_new_member)
+  )
+
+
+lpm_model <- lm(is_new_num ~ year_fct + party_fct + vote_share + nominate_dim1, 
+                data = lpm_data)
+
+
+summary(lpm_model)
+
+
+
+
+
+```
+
+
+
+Question 10) 
+
+Correlation refers to a statistical relationship where two variables move together either in the same direction or opposite directions, without one necessarily triggering the change in the other. Causation, implies a direct cause and effect link where a change in one variable is responsible for a change in another. While our regression models show a strong correlation between district competitiveness and member moderation, they do not definitively prove causation.
+
+
+The results from Part 3 cannot be interpreted as strictly causation because this was an observational study, not a randomized controlled experiment. We face issues like omitted variable bias, where unobserved factors might influence both the competitiveness of the race and the type of candidate who runs. Without controlling all possible omitted variables, there is most likely a strong correlation, but not definitive proof of a causal link.
